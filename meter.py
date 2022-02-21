@@ -13,7 +13,7 @@ pd.options.mode.chained_assignment = None
 
 def init_data():
     #Laster inn energidata fra Statsbygg EOS
-    power = pd.read_excel('Berte_Kanutte_Aarflot.xlsx')
+    power = pd.read_excel('./aalesund/G-bygg.xlsx')
     # Laster inn utetemperaturer
     utetemp = pd.read_excel('table3.xlsx')
 
@@ -49,7 +49,11 @@ def init_data():
     power['hour'] = power.date.dt.hour
     power = power.set_index('date')
     power.index = pd.to_datetime(power.index).tz_localize('Etc/UCT')
-    return power
+
+    p = []
+    for m in meters:
+        p.append(power[power.meter==m].power)
+    return p
 
 class Building():
     def __init__(self, name, area, floors, year):
@@ -60,10 +64,12 @@ class Building():
         self.weather_data = None
         self.meters = []
         self.total_consumption = None
+        self.day_difference_meter_data = []
         self.set_standard_u_value()
         self.scale_building_size()
         self.set_expected_heating_loss()
         self.set_excpected_airflow_exchange()
+        self.set_optimal_airflow_exchange()
 
         self.has_cooling = False
         self.has_heating = False
@@ -123,7 +129,10 @@ class Building():
         self.standard_heating_loss = self.floor_area*self.floor_u_value + self.roof_area*self.roof_u_value + self.facade_area*self.facade_u_value + self.window_area*self.window_u_value
 
     def set_excpected_airflow_exchange(self):
-        self.standard_airflow_exchange = self.area * 8
+        self.airflow = self.area * 8
+        
+    def set_optimal_airflow_exchange(self):
+        self.optimal_airflow_heating_loss = self.airflow*0.35*(1-0.85)/1000
 
     def set_one_meter(self, meter_data):
         met = Meter(meter_data, self.weather_data)
@@ -137,6 +146,14 @@ class Building():
         self.meters.append(Meter(main_meter, self.weather_data))
         self.meters.append(Meter(heating_meter, self.weather_data))
 
+    def set_multiple_meters(self, meters):
+        total_power = pd.Series()
+        for meter in meters:
+            total_power = total_power + meter
+            self.meters.append(Meter(meter, self.weather_data))
+        total_power.dropna(inplace=True)
+        self.total_consumption = Meter(total_power, self.weather_data)
+        
     def set_weather_data(self, place):
         location = self.get_location(place)
         self.weather_data = self.get_weather_data(location['id'])
@@ -247,6 +264,8 @@ class Building():
             self.cooling_start_temp = self.cooling_loss_at0/self.cooling_loss
         if self.ventilation_cooling > 0:
             self.start_temp_for_ventilation_cooling = self.ventilation_cooling_at0/self.ventilation_cooling
+
+        self.day_difference_meter_data.append(m.day_load.day_difference_meter_data)
     
     def view_plot_night(self):
         plt.scatter(self.total_consumption.day_load.meter_data.temperature, self.total_consumption.day_load.meter_data.power)
@@ -445,7 +464,7 @@ class PeriodLoad():
         if self.ventilation_cooling > 0:
             self.has_ventilation_cooling = True
         
-    def view_plot_night(self):
+    def view_plot_night(self, excpected_heating_loss=None):
         plt.scatter(self.night_meter_data.temperature, self.night_meter_data.power)
         tMin = min(self.night_meter_data.temperature)
         tMax = max(self.night_meter_data.temperature)
@@ -453,25 +472,30 @@ class PeriodLoad():
         Y_pred_max = self.heating_loss_at0 + self.heating_loss * tMax + self.constant_load_night
 
         Y_pred_min2_outdoor_heat = self.heating_loss_at0 + self.outdoor_heating + self.outdoor_heating_with_rainsensor  + self.constant_load_night
-        Y_pred_max2_outdoor_heat = Y_pred_min2_outdoor_heat + self.heating_loss * tMin
+        Y_pred_max2_outdoor_heat = Y_pred_min2_outdoor_heat + self.heating_loss * tMin     
 
         plt.plot([tMin, tMax], [Y_pred_min, Y_pred_max], color='red')
         if self.has_outdoor_heating:
             plt.plot([0, tMin], [Y_pred_min2_outdoor_heat, Y_pred_max2_outdoor_heat], color='orange')
 
-        plt.xlabel('Outdoor temperature (C)')
-        plt.ylabel('Energy consumption [kWh/h]')
+        if excpected_heating_loss:
+            Y_pred_min3 = -self.heating_start_temp*excpected_heating_loss + excpected_heating_loss * tMin + self.constant_load_night
+            Y_pred_max3 = -self.heating_start_temp*excpected_heating_loss + excpected_heating_loss * tMax + self.constant_load_night
+            plt.plot([tMin, tMax], [Y_pred_min3, Y_pred_max3], color='green')
+
+        plt.xlabel('Utetemperatur (C)')
+        plt.ylabel('Energiforbruk [kWh/h]')
         
         # Tittel
-        plt.title('Temperature dependence peakLoad-lowLoad each day')
+        plt.title('Kalkulert varmetap')
         if self.has_outdoor_heating:
-            plt.legend(['Heating power night [kWh/h]', 'Heatloss coefficent: ' + str(round(self.heating_loss,2)) + ' kW/K', 'Outdoor heating: ' + str(round(self.outdoor_heating + self.outdoor_heating_with_rainsensor,2)) + ' kW'])
+            plt.legend(['Forbruk oppvarming [kWh/h]', 'Varmetap: ' + str(round(self.heating_loss,2)) + ' kW/K', 'Utendørs varme: ' + str(round(self.outdoor_heating + self.outdoor_heating_with_rainsensor,2)) + ' kW'])
         else:
-            plt.legend(['Heating power night [kWh/h]', 'Heatloss coefficent: ' + str(round(self.heating_loss,2)) + ' kW/K'])
+            plt.legend(['Forbruk oppvarming [kWh/h]', 'Varmetap: ' + str(round(self.heating_loss,2)) + ' kW/K'])
 
         plt.show()
 
-    def view_plot_day(self):
+    def view_plot_day(self, optimal_heating_loss=None):
         plt.scatter(self.day_difference_meter_data.temperature, self.day_difference_meter_data.pDiff)
         tMin = min(self.day_difference_meter_data.temperature)
         tMax = max(self.day_difference_meter_data.temperature)
@@ -483,22 +507,25 @@ class PeriodLoad():
             Y_pred_max2 = self.ventilation_cooling_at0 + self.ventilation_cooling * tMax2
         Y_pred_min = self.ventilation_heating_at0 + self.ventilation_heating * tMin
         Y_pred_max = self.ventilation_heating_at0 + self.ventilation_heating * tMax
-
         
         plt.plot([tMin, tMax], [Y_pred_min, Y_pred_max], color='red')
         if self.has_ventilation_cooling:
             plt.plot([tMin2, tMax2], [Y_pred_min2, Y_pred_max2], color='orange')
 
-        plt.xlabel('Outdoor temperature (C')
-        plt.ylabel('Energy consumption [kWh/h]')
+        if optimal_heating_loss:
+            Y_pred_min2 = -self.start_temp_for_ventilation_heating*optimal_heating_loss + optimal_heating_loss * tMin
+            Y_pred_max2 = -self.start_temp_for_ventilation_heating*optimal_heating_loss + optimal_heating_loss * tMax
+            plt.plot([tMin, tMax], [Y_pred_min2, Y_pred_max2], color='green')
+
+        plt.xlabel('Utendørs temperatur (C')
+        plt.ylabel('Energiforbruk [kWh/h]')
         
         # Tittel
-        plt.title('Temperature dependence peakLoad-lowLoad each day')
+        plt.title('Energiforbruk oppvarming uteluft/ ventilasjon')
         if self.has_ventilation_cooling:
-            plt.legend(['Daytime heating power [kWh/h]', 'Heating coefficent: ' + str(round(self.ventilation_heating,2)) + ' kW/K', 'Cooling coefficent: ' + str(round(self.ventilation_cooling,2)) + ' kW/K'])
+            plt.legend(['Energiforbruk oppvarming uteluft [kWh/h]', 'Temperaturkoeffisient luftoppvarming: ' + str(round(self.ventilation_heating,2)) + ' kW/K', 'Temperaturkoeffisient luftkjøling: ' + str(round(self.ventilation_cooling,2)) + ' kW/K'])
         else:
-            plt.legend(['Daytime heating power [kWh/h]', 'Heating coefficent: ' + str(round(self.ventilation_heating,2)) + ' kW/K'])
-
+            plt.legend(['Energiforbruk oppvarming uteluft [kWh/h]', 'Temperaturkoeffisient luftoppvarming: ' + str(round(self.ventilation_heating,2)) + ' kW/K'])
         plt.show()
 
 class MeterMetaData():
