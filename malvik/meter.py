@@ -496,6 +496,7 @@ class PeriodLoad():
         Y_pred_min2_outdoor_heat = self.heating_loss_at0 + self.outdoor_heating + self.outdoor_heating_with_rainsensor  + self.constant_load_night
         Y_pred_max2_outdoor_heat = Y_pred_min2_outdoor_heat + self.heating_loss * tMin     
 
+        self.has_outdoor_heating = False
         plt.plot([tMin, tMax], [Y_pred_min, Y_pred_max], color='red')
         if self.has_outdoor_heating:
             plt.plot([0, tMin], [Y_pred_min2_outdoor_heat, Y_pred_max2_outdoor_heat], color='orange')
@@ -513,7 +514,7 @@ class PeriodLoad():
         if self.has_outdoor_heating:
             plt.legend(['Forbruk oppvarming [kWh/h]', 'Varmetap: ' + str(round(self.heating_loss,2)) + ' kW/K', 'Utendørs varme: ' + str(round(self.outdoor_heating + self.outdoor_heating_with_rainsensor,2)) + ' kW'])
         else:
-            plt.legend(['Forbruk oppvarming [kWh/h]', 'Varmetap: ' + str(round(self.heating_loss,2)) + ' kW/K'])
+            plt.legend(['Målt varmetap: ' + str(round(self.heating_loss,2)) + ' kW/K', 'Forventet varmetap: ' + str(round(excpected_heating_loss,2)) + ' kW/K'])
 
         plt.show()
 
